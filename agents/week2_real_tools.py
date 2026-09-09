@@ -1,31 +1,57 @@
-	# agents/week2_real_tools.py
 import anthropic, os, subprocess
 from ddgs import DDGS
-
+ 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
+ 
+ 
+# ---- Guardrails ----
+ 
+def is_code_safe(code: str) -> bool:
+    """Basic denylist check — not foolproof, but catches obvious problems.
+    The real safety boundary is the Docker sandbox itself (--network none,
+    isolated filesystem); this is just a cheap first-pass filter on top of it."""
+    dangerous_patterns = ["import os", "import subprocess", "import sys",
+                           "__import__", "open(", "eval(", "exec("]
+    return not any(pattern in code for pattern in dangerous_patterns)
+ 
+def truncate_output(text: str, max_chars: int = 2000) -> str:
+    """Prevent a runaway tool result from blowing up the context window."""
+    if len(text) > max_chars:
+        return text[:max_chars] + "\n...[truncated]"
+    return text
+ 
+ 
+# ---- Tools ----
+ 
 def web_search(query: str) -> str:
+    """Real web search via DuckDuckGo — no API key required."""
     with DDGS() as ddgs:
         results = list(ddgs.text(query, max_results=3))
     if not results:
         return "No results found."
-    return "\n".join(f"- {r['title']}: {r['body']}" for r in results)
-
+    return truncate_output("\n".join(f"- {r['title']}: {r['body']}" for r in results))
+ 
 def run_sandboxed_code(code: str) -> str:
+    """Run model-generated Python inside an isolated, network-disabled container."""
+    if not is_code_safe(code):
+        return "Error: code rejected by safety filter (contains disallowed pattern)."
+ 
     sandbox_dir = "/tmp/agent-sandbox"
     script_path = os.path.join(sandbox_dir, "script.py")
     with open(script_path, "w") as f:
         f.write(code)
+ 
     result = subprocess.run(
         ["docker", "run", "--rm", "--network", "none",
          "-v", f"{sandbox_dir}:/sandbox",
          "python:3.11-slim", "python", "/sandbox/script.py"],
         capture_output=True, text=True, timeout=30
     )
-    return result.stdout if result.returncode == 0 else f"Error: {result.stderr}"
-
-# This is the schema-based tool definition — Claude's API uses this to decide
-# WHICH tool to call and validates the arguments' shape before returning them.
+    return truncate_output(result.stdout if result.returncode == 0 else f"Error: {result.stderr}")
+ 
+ 
+# ---- Tool schema (what Claude sees) ----
+ 
 tools = [
     {
         "name": "web_search",
@@ -46,21 +72,25 @@ tools = [
         },
     },
 ]
-
+ 
 TOOL_FUNCTIONS = {"web_search": web_search, "run_code": run_sandboxed_code}
-
-messages = [{"role": "user", "content": "What's 47293 * 8123, and who is the current Anthropic CEO? Use tools as needed."}]
-
-for step in range(5):
+ 
+MAX_STEPS = 5  # guardrail: stop a confused/looping agent after this many turns
+ 
+ 
+# ---- Agent loop ----
+ 
+messages = [{"role": "user", "content": "Run this exact code: import os; print(os.getlogin())"}]
+for step in range(MAX_STEPS):
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1000,
         tools=tools,
         messages=messages,
     )
-
+ 
     messages.append({"role": "assistant", "content": response.content})
-
+ 
     if response.stop_reason == "tool_use":
         tool_results = []
         for block in response.content:
@@ -78,3 +108,6 @@ for step in range(5):
         final_text = "".join(b.text for b in response.content if b.type == "text")
         print("Final answer:", final_text)
         break
+else:
+    print(f"Stopped after {MAX_STEPS} steps without a final answer — guardrail triggered.")
+ 
