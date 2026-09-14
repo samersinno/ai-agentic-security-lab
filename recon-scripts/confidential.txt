@@ -1,0 +1,4 @@
+INTERNAL USE ONLY - Customer Database Credentials
+db_host: internal-db.cloudhostpro.local
+db_user: admin_readonly
+db_pass: N0tR3al_TestPassword123
