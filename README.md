@@ -22,6 +22,11 @@ Rather than just reading about agentic AI, this repo documents building agents a
 ### `notes/`
 - **`ai-agent-risk-assessment-template.md`** — a 7-question risk assessment framework for evaluating agentic AI systems before deployment, with each question grounded in a specific finding from the experiments below rather than generic best-practice advice.
 
+## Multi-agent pipeline
+
+- **`agents/pipeline.py` chains three agents with distinct roles against a real scan target (Metasploitable2): a **recon agent** (runs nmap), a **critic agent** (reviews the findings for false positives, over-claims, and gaps before anything reaches a client), and a **report agent** (writes the final deliverable, incorporating the critic's cautions rather than repeating the raw findings uncritically).
+
+The clearest evidence this produces a better result than a single agent: scanning a target running `vsftpd 2.3.4` (a version historically shipped with a well-known backdoor), the critic agent didn't just flag the version as risky — it correctly noted that confirming the *actual* backdoor requires checking whether port 6200 is open, and cautioned against asserting exploitation risk from the version number alone. That specific, technically grounded distinction flowed through into the final report's calibrated language ("we are not confirming that this system is vulnerable... must be verified manually") — a level of precision the single-agent version of this project never produced.
 ## Prompt injection experiments
 
 The core finding of this project: **an agent's safety depends on the tool's own restrictions, not on hoping the model resists a bad instruction.**
